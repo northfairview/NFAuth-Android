@@ -1,0 +1,53 @@
+name: Build signed NFAuth release
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Extract Android project
+        run: unzip NFAuth-Android-Source.zip -d android-project
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+      - name: Install Android tools
+        run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
+      - name: Set public version
+        run: sed -i "s/1.0-test/1.0/" android-project/app/build.gradle
+      - name: Compile release
+        working-directory: android-project
+        run: gradle assembleRelease --no-daemon
+      - name: Sign and verify APK
+        env:
+          SIGNING_PASSWORD: ${{ secrets.SIGNING_PASSWORD }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$SIGNING_PASSWORD"
+          umask 077
+          openssl enc -d -aes-256-cbc -pbkdf2 -iter 600000 -in nfauth-release.jks.enc -out "$RUNNER_TEMP/nfauth-release.jks" -pass env:SIGNING_PASSWORD
+          TOOLS="$ANDROID_HOME/build-tools/35.0.0"
+          "$TOOLS/zipalign" -f -p 4 android-project/app/build/outputs/apk/release/app-release-unsigned.apk "$RUNNER_TEMP/aligned.apk"
+          "$TOOLS/apksigner" sign --ks "$RUNNER_TEMP/nfauth-release.jks" --ks-key-alias nfauth --ks-pass env:SIGNING_PASSWORD --key-pass env:SIGNING_PASSWORD --out NFAuth-1.0.apk "$RUNNER_TEMP/aligned.apk"
+          "$TOOLS/apksigner" verify --verbose --print-certs NFAuth-1.0.apk
+          sha256sum NFAuth-1.0.apk > NFAuth-1.0.apk.sha256
+      - name: Remove decrypted signing key
+        if: always()
+        run: rm -f "$RUNNER_TEMP/nfauth-release.jks"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: NFAuth-1.0-RELEASE
+          path: |
+            NFAuth-1.0.apk
+            NFAuth-1.0.apk.sha256
+          if-no-files-found: error
