@@ -1,0 +1,33 @@
+name: Create encrypted signing key ONCE
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  create:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Generate and encrypt key
+        env:
+          SIGNING_PASSWORD: ${{ secrets.SIGNING_PASSWORD }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "${#SIGNING_PASSWORD}" -ge 20 || { echo 'Set SIGNING_PASSWORD to a strong password of at least 20 characters.'; exit 1; }
+          test ! -f nfauth-release.jks.enc || { echo 'A signing backup already exists. Do not generate another key.'; exit 1; }
+          umask 077
+          keytool -genkeypair -keystore "$RUNNER_TEMP/nfauth-release.jks" -storetype JKS -alias nfauth -keyalg RSA -keysize 3072 -validity 10000 -storepass:env SIGNING_PASSWORD -keypass:env SIGNING_PASSWORD -dname 'CN=NFAuth'
+          openssl enc -aes-256-cbc -salt -pbkdf2 -iter 600000 -in "$RUNNER_TEMP/nfauth-release.jks" -out nfauth-release.jks.enc -pass env:SIGNING_PASSWORD
+          rm -f "$RUNNER_TEMP/nfauth-release.jks"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: NFAuth-ENCRYPTED-signing-backup
+          path: nfauth-release.jks.enc
+          retention-days: 7
+          if-no-files-found: error
+          
